@@ -1,59 +1,69 @@
-<?php include '../includes/header.php'; ?>
-<?php 
+<?php
+include '../includes/header.php';
+require '../auth/connection.php';
 
-
-
-require '../auth/connection.php'; // Database connection
-
-// Redirect if not logged in
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../auth/login.php");
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id   = $_SESSION['user_id'];
 $user_name = $_SESSION['user_name'] ?? 'User';
 
-// Fetch stats
-$totalOrdersSql = "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ?";
-$pendingSql = "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Pending'";
-$deliveredSql = "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Delivered'";
-$activeTrackingsSql = "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='In Transit'";
+/* ---------- STAT FUNCTION ---------- */
+// Helper function to fetch specific counts
+function getStat($conn, $sql, $user_id) {
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $count = $result->fetch_assoc()['total'];
+    $stmt->close();
+    return $count;
+}
 
-$stmt = $conn->prepare($totalOrdersSql);
-$stmt->bind_param("i", $user_id); $stmt->execute(); $totalOrders = $stmt->get_result()->fetch_assoc()['total']; $stmt->close();
+/* ---------- DASHBOARD STATS (ALL STATUSES) ---------- */
+// 1. Total
+$totalOrders = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ?", $user_id);
 
-$stmt = $conn->prepare($pendingSql);
-$stmt->bind_param("i", $user_id); $stmt->execute(); $pending = $stmt->get_result()->fetch_assoc()['total']; $stmt->close();
+// 2. Pending
+$pending = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Pending'", $user_id);
 
-$stmt = $conn->prepare($deliveredSql);
-$stmt->bind_param("i", $user_id); $stmt->execute(); $delivered = $stmt->get_result()->fetch_assoc()['total']; $stmt->close();
+// 3. Picked Up
+$pickedUp = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Picked Up'", $user_id);
 
-$stmt = $conn->prepare($activeTrackingsSql);
-$stmt->bind_param("i", $user_id); $stmt->execute(); $activeTrackings = $stmt->get_result()->fetch_assoc()['total']; $stmt->close();
+// 4. In Transit
+$inTransit = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='In Transit'", $user_id);
 
-// Fetch recent 5 orders
-$recentOrdersSql = "SELECT id, receiver_name, status, tracking_id, pickup_date 
-                    FROM neworders 
-                    WHERE user_id = ? 
-                    ORDER BY id DESC 
-                    LIMIT 5";
+// 5. Out for Delivery
+$outDelivery = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Out for Delivery'", $user_id);
+
+// 6. Delivered
+$delivered = getStat($conn, "SELECT COUNT(*) AS total FROM neworders WHERE user_id = ? AND status='Delivered'", $user_id);
+
+/* ---------- RECENT ORDERS ---------- */
+$recentOrdersSql = "
+    SELECT 
+        id, sender_name, sender_phone, sender_email,
+        receiver_name, receiver_phone, receiver_email,
+        status, tracking_id, created_at
+    FROM neworders
+    WHERE user_id = ?
+    ORDER BY id DESC LIMIT 5";
+
 $stmt = $conn->prepare($recentOrdersSql);
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
-$recentOrdersRes = $stmt->get_result();
-$recentOrders = $recentOrdersRes->fetch_all(MYSQLI_ASSOC);
+$recentOrders = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 ?>
 
-
-
 <style>
-/* Dashboard Cards */
+/* Dashboard Grid Layout */
 .dashboard {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 2rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.5rem;
   padding: 2rem 5%;
 }
 
@@ -61,126 +71,136 @@ $stmt->close();
   background: #fff;
   padding: 1.5rem;
   border-radius: 12px;
-  box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
   text-align: center;
-  transition: transform 0.3s, box-shadow 0.3s;
+  transition: transform 0.3s ease;
+  border-bottom: 4px solid transparent; /* Colored border bottom */
 }
 
-.card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 10px 20px rgba(0,0,0,0.15);
-}
+.card:hover { transform: translateY(-5px); }
+.card h2 { font-size: 2rem; margin: 0; color: #333; }
+.card p { margin-top: 5px; color: #666; font-size: 0.9rem; font-weight: 500; }
 
-.card h2 {
-  font-size: 2rem;
-  color: #004aad;
-}
+/* Specific Card Colors */
+.card-total { border-color: #0077b6; }
+.card-pending { border-color: #ffc107; }
+.card-picked { border-color: #6c757d; }
+.card-transit { border-color: #17a2b8; }
+.card-out { border-color: #6f42c1; }
+.card-delivered { border-color: #28a745; }
 
-.card p {
-  font-size: 1rem;
-  color: #555;
-}
-
-/* Recent Orders Table */
+/* Table Styling */
 .recent-orders {
   margin: 2rem 5%;
   background: #fff;
-  padding: 1rem;
+  padding: 1.5rem;
   border-radius: 12px;
-  box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  overflow-x: auto;
 }
 
-.recent-orders table {
-  width: 100%;
-  border-collapse: collapse;
-}
+.recent-orders h3 { margin-top: 0; color: #0077b6; }
 
-.recent-orders th, .recent-orders td {
-  text-align: left;
-  padding: 0.8rem;
-  border-bottom: 1px solid #ddd;
-}
+table { width: 100%; border-collapse: collapse; min-width: 900px; }
+th, td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 0.9rem; text-align: left; }
+th { background: #f8f9fa; color: #555; font-weight: 600; text-transform: uppercase; font-size: 0.8rem; }
+tr:hover { background-color: #f9f9f9; }
 
-.recent-orders th {
-  background: #004aad;
-  color: #fff;
-  border-radius: 6px;
-}
+/* Status Badges */
+.status-badge { padding: 5px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; white-space: nowrap; }
 
-.recent-orders tr:hover {
-  background: #f1f5f9;
-}
-
-/* Greeting */
-.greeting {
-  margin: 2rem 5%;
-  font-size: 1.2rem;
-  color: #333;
-}
+/* Status Colors (Matches CSS classes generated by PHP) */
+.status-Pending { background:#fff3cd; color:#856404; }
+.status-Picked-Up { background:#e2e3e5; color:#383d41; }
+.status-In-Transit { background:#cce5ff; color:#004085; }
+.status-Out-for-Delivery { background:#e2d9f3; color:#6f42c1; }
+.status-Delivered { background:#d4edda; color:#155724; }
 </style>
 
-<div class="greeting">
-<p>Welcome back, <strong><?php echo htmlspecialchars($user_name); ?></strong>!</p>
+<div class="greeting" style="margin:2rem 5%;">
+  <h2 style="color: #333;">Dashboard Overview</h2>
+  <p style="color: #666;">Welcome back, <strong><?php echo htmlspecialchars($user_name); ?></strong> 👋</p>
 </div>
 
 <div class="dashboard">
-  <div class="card">
+  <div class="card card-total">
     <h2><?php echo $totalOrders; ?></h2>
     <p>Total Orders</p>
   </div>
-  <div class="card">
+  <div class="card card-pending">
     <h2><?php echo $pending; ?></h2>
-    <p>Pending Deliveries</p>
+    <p>Pending</p>
   </div>
-  <div class="card">
+  <div class="card card-picked">
+    <h2><?php echo $pickedUp; ?></h2>
+    <p>Picked Up</p>
+  </div>
+  <div class="card card-transit">
+    <h2><?php echo $inTransit; ?></h2>
+    <p>In Transit</p>
+  </div>
+  <div class="card card-out">
+    <h2><?php echo $outDelivery; ?></h2>
+    <p>Out for Delivery</p>
+  </div>
+  <div class="card card-delivered">
     <h2><?php echo $delivered; ?></h2>
-    <p>Delivered Orders</p>
-  </div>
-  <div class="card">
-    <h2><?php echo $activeTrackings; ?></h2>
-    <p>Active Trackings</p>
+    <p>Delivered</p>
   </div>
 </div>
 
 <div class="recent-orders">
-  <h3>Recent Orders</h3>
+  <h3>Recent Activity</h3>
   <table>
     <thead>
       <tr>
-        <th>Order ID</th>
-        <th>Recipient</th>
+        <th>ID</th>
+        <th>Sender</th>
+        <th>Receiver</th>
         <th>Status</th>
         <th>Tracking ID</th>
         <th>Date</th>
       </tr>
     </thead>
     <tbody>
-      <?php if($recentOrders): ?>
-        <?php foreach($recentOrders as $order): ?>
-          <tr>
-            <td>#<?php echo $order['id']; ?></td>
-            <td><?php echo htmlspecialchars($order['receiver_name']); ?></td>
-            <td><?php echo htmlspecialchars($order['status']); ?></td>
-            <td><?php echo htmlspecialchars($order['tracking_id']); ?></td>
-            <td><?php echo htmlspecialchars($order['pickup_date']); ?></td>
-          </tr>
-        <?php endforeach; ?>
-      <?php else: ?>
-          <tr><td colspan="5" style="text-align:center;">No orders found.</td></tr>
-      <?php endif; ?>
+    <?php if($recentOrders): ?>
+      <?php foreach($recentOrders as $order): 
+          // Replace spaces with dashes for CSS class (e.g., "Picked Up" -> "Picked-Up")
+          $statusClass = str_replace(' ', '-', $order['status']);
+      ?>
+        <tr>
+          <td>#<?php echo $order['id']; ?></td>
+          
+          <td>
+            <strong><?php echo htmlspecialchars($order['sender_name']); ?></strong><br>
+            <small>📞 <?php echo $order['sender_phone']; ?></small>
+          </td>
+
+          <td>
+            <strong><?php echo htmlspecialchars($order['receiver_name']); ?></strong><br>
+            <small>📞 <?php echo $order['receiver_phone']; ?></small>
+          </td>
+
+          <td>
+            <span class="status-badge status-<?php echo $statusClass; ?>">
+              <?php echo $order['status']; ?>
+            </span>
+          </td>
+
+          <td style="font-family:monospace; color:#0077b6;">
+            <?php echo $order['tracking_id']; ?>
+          </td>
+          
+          <td><?php echo date('M d, Y', strtotime($order['created_at'])); ?></td>
+        </tr>
+      <?php endforeach; ?>
+    <?php else: ?>
+      <tr>
+        <td colspan="6" style="text-align:center; padding: 20px; color: #999;">No orders found.</td>
+      </tr>
+    <?php endif; ?>
     </tbody>
   </table>
 </div>
 
 <?php include '../includes/footer.php'; ?>
-
-<script>
-// Highlight card on click
-const cards = document.querySelectorAll('.card');
-cards.forEach(card => {
-  card.addEventListener('click', () => {
-    cards.forEach(c => c.style.border = 'none');
-    card.style.border = '2px solid #004aad';
-  });
-});
-</script>

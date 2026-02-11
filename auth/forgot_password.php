@@ -44,6 +44,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             // Send password reset email with token link
             $resetLink = "http://localhost/delivery/auth/reset.php?email=" . urlencode($email) . "&token=" . $token;
 
+            $resetLink = "http://localhost/delivery/auth/reset.php?email=" . urlencode($email) . "&token=" . $token;
+
             $subject = "Password Reset Request";
             $body = "Hello,<br>Click the link below to reset your password:<br><a href='$resetLink'>$resetLink</a><br>This link expires in 1 hour.";
 

@@ -2,340 +2,234 @@
 session_start();
 require '../auth/connection.php';
 
+// Security Check
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     header("Location: ../auth/admin_login.php");
     exit;
 }
 
-// Handle status update via POST
-if (isset($_POST['update_status'])) {
-    $order_id = intval($_POST['order_id']);
-    $status   = $_POST['status'];
+/* ================= DELETE LOGIC (Single & Bulk) ================= */
+if (isset($_POST['delete_single'])) {
+    $id = (int)$_POST['order_id'];
 
-    // 1. Update status
-    $stmt = $conn->prepare("UPDATE neworders SET status=? WHERE id=?");
-    if ($stmt === false) {
-        die("Prepare failed: " . $conn->error);
-    }
-    $stmt->bind_param("si", $status, $order_id);
+    // 1. Check status before deleting to see if we need to send a cancellation mail
+    $stmt = $conn->prepare("SELECT u.email, u.name, o.tracking_id, o.status FROM users u 
+                            JOIN neworders o ON u.id = o.user_id WHERE o.id = ?");
+    $stmt->bind_param("i", $id);
     $stmt->execute();
+    $res = $stmt->get_result()->fetch_assoc();
     $stmt->close();
 
-    // 2. Get user's email + details
-    $sql = "SELECT u.email, o.tracking_id, o.sender_name, o.receiver_name
-            FROM users u
-            JOIN neworders o ON u.id = o.user_id
-            WHERE o.id = ?";
-    $getUser = $conn->prepare($sql);
-    if ($getUser === false) {
-        die("SQL Error: " . $conn->error);
-    }
-    $getUser->bind_param("i", $order_id);
-    $getUser->execute();
-    $getUser->bind_result($email, $tracking_id, $sender_name, $receiver_name);
-    $getUser->fetch();
-    $getUser->close();
+    if ($res) {
+        $current_status = $res['status'];
+        
+        // 2. If Pending, send Cancellation Email
+        if ($current_status === 'Pending') {
+            $email = $res['email'];
+            $user_name = $res['name'];
+            $track_id = $res['tracking_id'];
 
-    if ($email) {
-        // 3. Prepare email content
-        $subject = "Order Status Update - Tracking ID: $tracking_id";
-
-        $message = "
-        <html>
-        <head>
-            <style>
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f4f8fb; margin:0; padding:20px; }
-                .email-container { max-width:600px; margin:auto; background:#ffffff; border-radius:10px; box-shadow:0 5px 20px rgba(0,0,0,0.1); padding:25px; }
-                h2 { color:#0077b6; }
-                .status-box { background:#e0f7fa; border-left:5px solid #0077b6; padding:15px; margin:20px 0; font-size:16px; }
-                .footer { text-align:center; margin-top:30px; font-size:12px; color:#666; }
-                .btn { display:inline-block; padding:10px 20px; background:#0077b6; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; }
-                .btn:hover { background:#005f99; }
-            </style>
-        </head>
-        <body>
-            <div class='email-container'>
-                <h2>📦Order Status Update</h2>
-                <p>Dear Customer,</p>
-                <p>Your order with <strong>Tracking ID: $tracking_id</strong> has been updated.</p>
-                
-                <div class='status-box'>
-                    Current Status: <strong>$status</strong>
+            $subject = "Order Cancelled: $track_id";
+            $message = "
+            <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; overflow: hidden;'>
+                <div style='background: #dc3545; padding: 20px; text-align: center; color: white;'>
+                    <h2 style='margin:0;'>ShipManager Logistics</h2>
                 </div>
-
-                <p><b>Sender:</b> $sender_name<br>
-                <b>Receiver:</b> $receiver_name</p>
-
-                <p>You can track your package using the button below:</p>
-                <p><a href='http://localhost/delivery/admin/tracking.php?tid=$tracking_id' class='btn'>Track My Order</a></p>
-
-                <div class='footer'>
-                    &copy; " . date("Y") . " ShipManager. All rights reserved.
+                <div style='padding: 25px; color: #444;'>
+                    <p>Hi <strong>$user_name</strong>,</p>
+                    <p>We regret to inform you that your delivery request has been <strong>Cancelled</strong> and removed from our system.</p>
+                    <div style='background: #fff5f5; border: 1px dashed #dc3545; padding: 15px; text-align: center; margin: 20px 0;'>
+                        <span style='font-size: 14px; color: #666;'>Tracking ID</span><br>
+                        <strong style='font-size: 22px; color: #dc3545;'>$track_id</strong>
+                    </div>
+                    <p>If you believe this was a mistake, please contact our support team immediately.</p>
                 </div>
-            </div>
-        </body>
-        </html>";
+            </div>";
 
-        // 4. Set headers
-        $headers  = "MIME-Version: 1.0" . "\r\n";
-        $headers .= "Content-type:text/html;charset=UTF-8" . "\r\n";
-        $headers .= "From: ShipManager <no-reply@shipmanager.com>" . "\r\n";
-
-        // 5. Send email
-        if (mail($email, $subject, $message, $headers)) {
-            // success (you can show a message if you want)
-            // echo "Mail sent successfully";
-        } else {
-            echo "Mail could not be sent.";
+            $headers  = "MIME-Version: 1.0" . "\r\n";
+            $headers .= "Content-type:text/html;charset=UTF-8" . "\r\n";
+            $headers .= "From: ShipManager <no-reply@shipmanager.com>" . "\r\n";
+            mail($email, $subject, $message, $headers);
         }
+
+        // 3. Perform Delete
+        $conn->query("DELETE FROM neworders WHERE id = $id");
+        header("Location: " . $_SERVER['PHP_SELF'] . "?deleted=true");
+        exit;
     }
 }
 
-
-// Handle search
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-
-// Fetch orders
-if ($search !== '') {
-    $searchSql = "SELECT * FROM neworders 
-                    WHERE sender_name LIKE ? 
-                       OR receiver_name LIKE ? 
-                       OR tracking_id LIKE ? 
-                  ORDER BY 
-                    CASE 
-                      WHEN sender_name LIKE ? THEN 1
-                      WHEN receiver_name LIKE ? THEN 2
-                      WHEN tracking_id LIKE ? THEN 3
-                      ELSE 4 
-                    END, id DESC";
-    $stmt = $conn->prepare($searchSql);
-    $likeSearch = "%".$search."%";
-    $stmt->bind_param("ssssss", $likeSearch, $likeSearch, $likeSearch, $likeSearch, $likeSearch, $likeSearch);
-    $stmt->execute();
-    $orders = $stmt->get_result();
-} else {
-    $ordersSql = "SELECT * FROM neworders ORDER BY id DESC";
-    $orders = $conn->query($ordersSql);
+// Bulk delete (Keep for Delivered items)
+if (isset($_POST['delete_bulk']) && !empty($_POST['order_ids'])) {
+    $ids = implode(',', array_map('intval', $_POST['order_ids']));
+    $conn->query("DELETE FROM neworders WHERE id IN ($ids)");
+    header("Location: " . $_SERVER['PHP_SELF'] . "?deleted=true");
+    exit;
 }
 
-// Auto-generate tracking IDs if empty
-while ($row = $orders->fetch_assoc()) {
-    if (empty($row['tracking_id'])) {
-        $tracking_id = "TRK".date("Ymd")."-".$row['id'];
-        $update = $conn->prepare("UPDATE neworders SET tracking_id=? WHERE id=?");
-        $update->bind_param("si", $tracking_id, $row['id']);
-        $update->execute();
+/* ================= UPDATE STATUS LOGIC ================= */
+if (isset($_POST['update_status'])) {
+    $order_id = (int)$_POST['order_id'];
+    $status   = trim($_POST['status']);
+
+    $stmt = $conn->prepare("UPDATE neworders SET status=? WHERE id=?");
+    $stmt->bind_param("si", $status, $order_id);
+    
+    if($stmt->execute()){
+        $sql = "SELECT u.email, u.name, o.tracking_id FROM users u 
+                JOIN neworders o ON u.id = o.user_id WHERE o.id = ?";
+        $mailQ = $conn->prepare($sql);
+        $mailQ->bind_param("i", $order_id);
+        $mailQ->execute();
+        $mailQ->bind_result($email, $user_real_name, $tracking_id);
+        $mailQ->fetch();
+        $mailQ->close();
+
+        if ($email) {
+            $subject = "Shipment Update: $tracking_id";
+            $message = "
+            <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; overflow: hidden;'>
+                <div style='background: #0077b6; padding: 20px; text-align: center; color: white;'>
+                    <h2 style='margin:0;'>ShipManager Logistics</h2>
+                </div>
+                <div style='padding: 25px; color: #444;'>
+                    <p>Hi <strong>$user_real_name</strong>,</p>
+                    <p>Your shipment status has been updated to:</p>
+                    <div style='background: #f4f9ff; border: 1px dashed #0077b6; padding: 15px; text-align: center; margin: 20px 0;'>
+                        <strong style='font-size: 22px; color: #0077b6;'>$status</strong>
+                    </div>
+                    <p><strong>Tracking ID:</strong> $tracking_id</p>
+                </div>
+            </div>";
+
+            $headers  = "MIME-Version: 1.0" . "\r\n";
+            $headers .= "Content-type:text/html;charset=UTF-8" . "\r\n";
+            $headers .= "From: ShipManager <no-reply@shipmanager.com>" . "\r\n";
+            mail($email, $subject, $message, $headers);
+        }
+        header("Location: " . $_SERVER['PHP_SELF'] . "?updated=true");
+        exit();
     }
 }
-// Re-fetch updated orders after tracking ID generation
+
+/* ================= SEARCH LOGIC ================= */
+$search = $_GET['search'] ?? '';
+$query = "SELECT * FROM neworders";
 if ($search !== '') {
+    $query .= " WHERE sender_name LIKE ? OR receiver_name LIKE ? OR tracking_id LIKE ?";
+    $stmt = $conn->prepare($query . " ORDER BY id DESC");
+    $like = "%$search%";
+    $stmt->bind_param("sss", $like, $like, $like);
     $stmt->execute();
     $orders = $stmt->get_result();
 } else {
-    $orders = $conn->query($ordersSql);
+    $orders = $conn->query($query . " ORDER BY id DESC");
 }
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Manage Orders - Admin Panel</title>
-<style>
-/* GENERAL BODY */
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    margin:0; padding:0; 
-    background: #e0f0ff;
-}
-
-/* CONTAINER CARD */
-.container {
-    max-width: 1200px;
-    margin: 0px auto;
-    padding: 30px;
-    background: #ffffff;
-    border-radius: 20px;
-    box-shadow: 0 15px 40px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-/* TITLE */
-h2 {
-    text-align:center;
-    font-size:2.2rem;
-    margin-bottom:25px;
-    background: linear-gradient(135deg, #0077b6, #00b4d8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-/* SEARCH BOX */
-.search-box {
-    margin-bottom: 20px;
-    display: flex;
-    justify-content: flex-end;
-}
-.search-box input {
-    padding: 8px 12px;
-    border-radius: 8px 0 0 8px;
-    border: 1px solid #ccc;
-    width: 250px;
-}
-.search-box button {
-    padding: 8px 15px;
-    border:none;
-    background: #0077b6;
-    color:#fff;
-    font-weight:bold;
-    border-radius:0 8px 8px 0;
-    cursor:pointer;
-    transition: 0.3s;
-}
-.search-box button:hover {
-    background: #005f99;
-}
-
-/* TABLE STYLING */
-table {
-    width:100%;
-    border-collapse: collapse;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-}
-th, td {
-    padding:14px 10px;
-    text-align:center;
-    border-bottom: 1px solid #eee;
-}
-th {
-    background: linear-gradient(135deg, #0077b6, #00b4d8);
-    color:#fff;
-    font-weight:600;
-    text-transform: uppercase;
-}
-tr:hover {
-    background:#f5faff;
-}
-
-/* STATUS STYLING */
-.status-delivered { color:green; font-weight:bold; }
-.status-pending { color:orange; font-weight:bold; }
-.status-intransit { color:blue; font-weight:bold; }
-
-/* BUTTONS */
-button.update-btn {
-    padding:6px 12px;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-    font-weight:bold;
-    background: #0077b6;
-    color:#fff;
-    transition:0.3s;
-}
-button.update-btn:hover {
-    background: #005f99;
-}
-
-select {
-    padding:5px 8px;
-    border-radius:8px;
-    border:1px solid #ccc;
-}
-
-/* HIGHLIGHTING */
-.highlight { 
-    background: yellow; 
-    font-weight: bold; 
-    padding: 2px 4px; 
-    border-radius: 3px;
-}
-
-/* RESPONSIVE */
-@media(max-width:992px){
-    .search-box{flex-direction:column; align-items:flex-end; gap:10px;}
-    table, th, td{font-size:0.85rem;}
-}
-</style>
+    <meta charset="UTF-8">
+    <title>Admin Dashboard - Logistics Management</title>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root { --blue: #0077b6; --green: #28a745; --red: #dc3545; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; margin: 0; }
+        .container { max-width: 98%; margin: 20px auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        .header-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { background: #f8f9fa; color: #555; padding: 12px; border-bottom: 2px solid #eee; text-align: left; }
+        td { padding: 12px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; }
+        .status-Pending { background: #fff3cd; color: #856404; }
+        .status-Delivered { background: #d4edda; color: #155724; }
+        .btn-update { background: var(--blue); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .btn-delete { background: var(--red); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .action-cell { display: flex; gap: 8px; align-items: center; }
+        select { padding: 6px; border-radius: 4px; border: 1px solid #ccc; }
+    </style>
 </head>
 <body>
+
 <div class="container">
-<h2>Manage Orders</h2>
+    <div class="header-flex">
+        <h2 style="color: var(--blue);">📦 Logistics Command Center</h2>
+        <div class="bulk-actions">
+            <form method="GET" style="display:flex; gap:10px;">
+                <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" style="padding:10px; border-radius:5px; border:1px solid #ddd; width:250px;" placeholder="Search...">
+                <button type="submit" class="btn-update">Search</button>
+            </form>
+        </div>
+    </div>
 
-<form method="GET" class="search-box">
-    <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search by sender, receiver or tracking ID">
-    <button type="submit" class="update-btn">Search</button>
-</form>
+    <form id="bulkDeleteForm" method="POST">
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 30px;"><input type="checkbox" id="checkAll"></th>
+                <th>Sender / Pickup</th>
+                <th>Receiver / Delivery</th>
+                <th>Tracking ID</th>
+                <th>Status</th>
+                <th>Action Center</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php while ($row = $orders->fetch_assoc()): 
+                $status = trim($row['status']);
+                $statusClass = str_replace(' ', '-', $status); 
+            ?>
+            <tr>
+                <td><input type="checkbox" name="order_ids[]" value="<?= $row['id'] ?>" class="item-checkbox"></td>
+                <td><strong><?= htmlspecialchars($row['sender_name']) ?></strong></td>
+                <td><strong><?= htmlspecialchars($row['receiver_name']) ?></strong></td>
+                <td><code><?= $row['tracking_id'] ?></code></td>
+                <td><span class="badge status-<?= $statusClass ?>"><?= $status ?></span></td>
+                <td class="action-cell">
+                    
+                    <?php if ($status !== 'Delivered'): ?>
+                        <form method="POST" style="display:flex; gap:5px;">
+                            <input type="hidden" name="order_id" value="<?= $row['id'] ?>">
+                            <select name="status">
+                                <?php 
+                                $options = ["Pending", "Picked Up", "In Transit", "Out for Delivery", "Delivered"];
+                                foreach($options as $opt) {
+                                    $selected = ($status == $opt) ? 'selected' : '';
+                                    echo "<option value='$opt' $selected>$opt</option>";
+                                }
+                                ?>
+                            </select>
+                            <button name="update_status" class="btn-update">Update</button>
+                        </form>
+                    <?php endif; ?>
 
-<table>
-    <thead>
-        <tr>
-            <th>ID</th>
-            <th>Sender</th>
-            <th>Receiver</th>
-            <th>Address</th>
-            <th>Phone</th>
-            <th>Package</th>
-            <th>Weight</th>
-            <th>Pickup Date</th>
-            <th>Tracking ID</th>
-            <th>Status</th>
-            <th>Action</th>
-        </tr>
-    </thead>
-    <tbody>
-    <?php
-    if($orders->num_rows > 0){
-        while($row = $orders->fetch_assoc()):
+                    <?php if ($status === 'Pending' || $status === 'Delivered'): ?>
+                        <form method="POST" onsubmit="return confirm('Delete this record? <?php echo ($status==='Pending') ? 'User will receive a cancellation email.' : ''; ?>')">
+                            <input type="hidden" name="order_id" value="<?= $row['id'] ?>">
+                            <button name="delete_single" class="btn-delete">Delete</button>
+                        </form>
+                    <?php endif; ?>
 
-            // Highlight search words
-            $sender = $receiver = $tracking = '';
-            if($search !== ''){
-                $sender = str_ireplace($search, "<span class='highlight'>".$search."</span>", htmlspecialchars($row['sender_name']));
-                $receiver = str_ireplace($search, "<span class='highlight'>".$search."</span>", htmlspecialchars($row['receiver_name']));
-                $tracking = str_ireplace($search, "<span class='highlight'>".$search."</span>", htmlspecialchars($row['tracking_id']));
-            } else {
-                $sender = htmlspecialchars($row['sender_name']);
-                $receiver = htmlspecialchars($row['receiver_name']);
-                $tracking = htmlspecialchars($row['tracking_id']);
-            }
-    ?>
-        <tr>
-            <td><?php echo $row['id']; ?></td>
-            <td><?php echo $sender; ?></td>
-            <td><?php echo $receiver; ?></td>
-            <td><?php echo htmlspecialchars($row['delivery_address']); ?></td>
-            <td><?php echo htmlspecialchars($row['receiver_phone']); ?></td>
-            <td><?php echo htmlspecialchars($row['package_type']); ?></td>
-            <td><?php echo $row['weight']; ?></td>
-            <td><?php echo $row['pickup_date']; ?></td>
-            <td><?php echo $tracking; ?></td>
-            <td class="<?php
-                if($row['status']=='Delivered') echo 'status-delivered';
-                elseif($row['status']=='Pending') echo 'status-pending';
-                else echo 'status-intransit';
-            ?>"><?php echo $row['status']; ?></td>
-            <td>
-                <form method="POST" style="display:flex; gap:5px; justify-content:center;">
-                    <input type="hidden" name="order_id" value="<?php echo $row['id']; ?>">
-                    <select name="status">
-                        <option value="Pending" <?php if($row['status']=='Pending') echo 'selected'; ?>>Pending</option>
-                        <option value="In Transit" <?php if($row['status']=='In Transit') echo 'selected'; ?>>In Transit</option>
-                        <option value="Delivered" <?php if($row['status']=='Delivered') echo 'selected'; ?>>Delivered</option>
-                    </select>
-                    <button type="submit" name="update_status" class="update-btn">Update</button>
-                </form>
-            </td>
-        </tr>
-    <?php
-        endwhile;
-    } else {
-        echo "<tr><td colspan='11' style='text-align:center;font-weight:bold;'>No orders found.</td></tr>";
-    }
-    ?>
-    </tbody>
-</table>
+                </td>
+            </tr>
+            <?php endwhile; ?>
+        </tbody>
+    </table>
+    </form>
 </div>
+
+<script>
+    document.getElementById('checkAll').onclick = function() {
+        var checkboxes = document.querySelectorAll('.item-checkbox');
+        for (var checkbox of checkboxes) { checkbox.checked = this.checked; }
+    }
+    <?php if(isset($_GET['updated'])): ?>
+        Swal.fire({ icon: 'success', title: 'Updated!', text: 'Status changed.', timer: 1500, showConfirmButton: false });
+    <?php endif; ?>
+    <?php if(isset($_GET['deleted'])): ?>
+        Swal.fire({ icon: 'success', title: 'Deleted!', text: 'Record removed.', timer: 1500, showConfirmButton: false });
+    <?php endif; ?>
+</script>
 </body>
 </html>

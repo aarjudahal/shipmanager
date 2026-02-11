@@ -2,13 +2,17 @@
 // filepath: c:\xampp\htdocs\delivery\users\track.php
 session_start();
 require '../auth/connection.php';
- // Database connection
+
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../auth/login.php");
     exit();
 }
 
 $searchResult = null;
+$currentStep = 0; // Default: No steps completed
+
+// Define your status flow
+$statuses = ["Pending", "Picked Up", "In Transit", "Out for Delivery", "Delivered"];
 
 if (isset($_GET['tracking'])) {
     $trackingNo = trim($_GET['tracking']);
@@ -19,6 +23,13 @@ if (isset($_GET['tracking'])) {
     $result = $stmt->get_result();
     $searchResult = $result->fetch_assoc();
     $stmt->close();
+
+    if ($searchResult) {
+        // Find which index the current status is at
+        $dbStatus = $searchResult['status'] ?? 'Pending';
+        $currentStep = array_search($dbStatus, $statuses);
+        if ($currentStep === false) $currentStep = 0; 
+    }
 }
 ?>
 
@@ -27,152 +38,177 @@ if (isset($_GET['tracking'])) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Track Order - ShipManager</title>
+<title>Real-time Track - ShipManager</title>
 <style>
-body {
-    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-    margin: 0;
-    background: linear-gradient(135deg, #004aad, #0077b6);
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-}
+    :root {
+        --primary-color: #004aad;
+        --secondary-color: #0077b6;
+        --bg-gradient: linear-gradient(135deg, #004aad, #0077b6);
+        --gray-light: #e0e0e0;
+        --success-color: #28a745;
+    }
 
-.container {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(15px);
-    max-width: 700px;
-    width: 95%;
-    margin: 50px auto;
-    padding: 30px 40px;
-    border-radius: 20px;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    animation: fadeIn 0.8s ease, popIn 0.5s ease;
-}
+    body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f4f7f6;
+        display: flex;
+        justify-content: center;
+        padding-top: 50px;
+    }
 
-h2 {
-    text-align: center;
-    margin-bottom: 25px;
-    font-size: 2rem;
-    background: linear-gradient(135deg, #004aad, #0077b6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
+    .container {
+        background: #fff;
+        max-width: 800px;
+        width: 90%;
+        padding: 40px;
+        border-radius: 15px;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.1);
+    }
 
-.search-box {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 25px;
-}
+    h2 { text-align: center; color: var(--primary-color); }
 
-.search-box input {
-    width: 60%;
-    padding: 12px 15px;
-    border-radius: 10px 0 0 10px;
-    border: 1px solid #ccc;
-    font-size: 1rem;
-}
-
-.search-box button {
-    padding: 12px 20px;
-    border: none;
-    border-radius: 0 10px 10px 0;
-    background: linear-gradient(135deg, #004aad, #0077b6);
-    color: #fff;
-    font-weight: bold;
-    cursor: pointer;
-    transition: transform 0.2s, background 0.3s;
-}
-
-.search-box button:hover {
-    background: linear-gradient(135deg, #003580, #005f99);
-    transform: scale(1.05);
-}
-
-.order-info {
-    margin-top: 20px;
-}
-
-.order-info table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 15px;
-}
-
-.order-info th, .order-info td {
-    padding: 12px 15px;
-    border: 1px solid #ccc;
-    text-align: left;
-}
-
-.order-info th {
-    background: linear-gradient(135deg, #004aad, #0077b6);
-    color: #fff;
-}
-
-.no-result {
-    text-align: center;
-    font-size: 1.1rem;
-    color: #842029;
-    background: #f8d7da;
-    padding: 12px;
-    border-radius: 10px;
-    border: 1px solid #f5c2c7;
-    margin-top: 15px;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes popIn {
-    from { transform: scale(0.95); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-}
-
-@media (max-width: 768px) {
+    /* Search Box */
+    .search-box { display: flex; margin-bottom: 40px; }
     .search-box input {
-        width: 100%;
-        margin-bottom: 10px;
-        border-radius: 10px;
+        flex: 1; padding: 15px; border: 2px solid var(--gray-light);
+        border-radius: 10px 0 0 10px; outline: none;
     }
     .search-box button {
-        width: 100%;
-        border-radius: 10px;
+        padding: 15px 25px; border: none; background: var(--bg-gradient);
+        color: white; font-weight: bold; border-radius: 0 10px 10px 0; cursor: pointer;
     }
-}
+
+    /* --- THE TIMELINE CSS --- */
+    .timeline-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: relative;
+        margin: 40px 0;
+    }
+
+    /* The connecting line */
+    .timeline-container::before {
+        content: '';
+        position: absolute;
+        top: 25%;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background: var(--gray-light);
+        z-index: 1;
+    }
+
+    /* The progress line */
+    .progress-line {
+        position: absolute;
+        top: 25%;
+        left: 0;
+        height: 4px;
+        background: var(--success-color);
+        z-index: 1;
+        transition: width 0.5s ease-in-out;
+        width: <?php echo ($currentStep / (count($statuses) - 1)) * 100; ?>%;
+    }
+
+    .step {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+        flex: 1;
+    }
+
+    .circle {
+        width: 35px;
+        height: 35px;
+        background: #fff;
+        border: 4px solid var(--gray-light);
+        border-radius: 50%;
+        margin: 0 auto 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        transition: 0.3s;
+    }
+
+    .step.active .circle {
+        border-color: var(--success-color);
+        background: var(--success-color);
+        color: white;
+    }
+
+    .step.active .label {
+        color: var(--success-color);
+        font-weight: bold;
+    }
+
+    .label { font-size: 0.85rem; color: #777; }
+
+    /* Details Table */
+    .details-card {
+        margin-top: 30px;
+        border-top: 1px solid #eee;
+        padding-top: 20px;
+    }
+    .info-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+    }
+    .info-item label { color: #888; font-size: 0.8rem; display: block; }
+    .info-item span { font-weight: 600; color: #333; }
+
+    @media (max-width: 600px) {
+        .timeline-container { flex-direction: column; align-items: flex-start; gap: 20px; }
+        .timeline-container::before, .progress-line { display: none; }
+        .step { display: flex; align-items: center; gap: 15px; }
+        .circle { margin: 0; }
+    }
 </style>
 </head>
 <body>
+
 <div class="container">
-    <h2>Track Your Order</h2>
+    <h2>Track Your Shipment</h2>
+    
     <form class="search-box" method="GET">
-        <input type="text" name="tracking" placeholder="Enter Tracking Number" required>
+        <input type="text" name="tracking" placeholder="Enter Tracking ID (e.g. SHIP123)" required 
+               value="<?php echo isset($_GET['tracking']) ? htmlspecialchars($_GET['tracking']) : ''; ?>">
         <button type="submit">Track</button>
     </form>
 
-    <div class="order-info">
-        <?php if ($searchResult): ?>
-            <table>
-                <tr><th>Sender Name</th><td><?php echo htmlspecialchars($searchResult['sender_name']); ?></td></tr>
-                <tr><th>Receiver Name</th><td><?php echo htmlspecialchars($searchResult['receiver_name']); ?></td></tr>
-                <tr><th>Delivery Address</th><td><?php echo htmlspecialchars($searchResult['delivery_address']); ?></td></tr>
-                <tr><th>Phone</th><td><?php echo htmlspecialchars($searchResult['receiver_phone']); ?></td></tr>
-                <tr><th>Package Type</th><td><?php echo htmlspecialchars($searchResult['package_type']); ?></td></tr>
-                <tr><th>Weight (kg)</th><td><?php echo htmlspecialchars($searchResult['weight']); ?></td></tr>
-                <tr><th>Pickup Date</th><td><?php echo htmlspecialchars($searchResult['pickup_date']); ?></td></tr>
-                <tr><th>Status</th><td><?php echo htmlspecialchars($searchResult['status'] ?? 'Pending'); ?></td></tr>
-            </table>
-        <?php elseif (isset($_GET['tracking'])): ?>
-            <div class="no-result">❌ No order found with this tracking number.</div>
-        <?php endif; ?>
-    </div>
+    <?php if ($searchResult): ?>
+        <div class="timeline-container">
+            <div class="progress-line"></div>
+            <?php foreach ($statuses as $index => $statusText): ?>
+                <div class="step <?php echo ($index <= $currentStep) ? 'active' : ''; ?>">
+                    <div class="circle">
+                        <?php if ($index < $currentStep): ?> ✓ <?php else: echo $index + 1; endif; ?>
+                    </div>
+                    <div class="label"><?php echo $statusText; ?></div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="details-card">
+            <h3>Package Information</h3>
+            <div class="info-grid">
+                <div class="info-item"><label>Sender</label><span><?php echo htmlspecialchars($searchResult['sender_name']); ?></span></div>
+                <div class="info-item"><label>Receiver</label><span><?php echo htmlspecialchars($searchResult['receiver_name']); ?></span></div>
+                <div class="info-item"><label>Destination</label><span><?php echo htmlspecialchars($searchResult['delivery_address']); ?></span></div>
+                <div class="info-item"><label>Package</label><span><?php echo htmlspecialchars($searchResult['package_type']); ?></span></div>
+                <div class="info-item"><label>Current Status</label><span style="color:var(--success-color)"><?php echo htmlspecialchars($dbStatus); ?></span></div>
+            </div>
+        </div>
+
+    <?php elseif (isset($_GET['tracking'])): ?>
+        <div style="text-align:center; color: #d9534f; padding: 20px; background: #fdf7f7; border-radius: 10px;">
+            No records found for that ID. Please check and try again.
+        </div>
+    <?php endif; ?>
 </div>
 
-<script>
-// Optional: Focus on input after page load
-document.querySelector('input[name="tracking"]').focus();
-</script>
 </body>
 </html>
