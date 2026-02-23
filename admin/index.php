@@ -225,7 +225,7 @@ h2 { text-align:center; font-size:2rem; margin-bottom:20px; color:#004aad; }
                         elseif($row['status']=='Pending') echo 'status-pending';
                         else echo 'status-intransit';
                     ?>"><?php echo $row['status']; ?></td>
-                    <td><?php echo $row['pickup_date']; ?></td>
+                    <td><?php echo date("d M Y, h:i A", strtotime($row['created_at'])); ?></td>
                 </tr>
                 <?php endwhile; ?>
             </tbody>

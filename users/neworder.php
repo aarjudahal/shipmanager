@@ -12,6 +12,7 @@ $errorMsg   = $_SESSION['errorMsg'] ?? "";
 unset($_SESSION['successMsg'], $_SESSION['errorMsg']);
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
+
     $user_id = $_SESSION['user_id'];
     $sender_name = trim($_POST['sender_name']);
     $sender_phone = trim($_POST['sender_phone']);
@@ -32,37 +33,76 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         exit();
     }
 
-    $tracking_id = 'TRK'.strtoupper(substr(md5(uniqid()),0,8));
+    $tracking_id = 'TRK' . strtoupper(substr(md5(uniqid()), 0, 8));
     $status = 'Pending';
 
-    $agentRes = $conn->query("SELECT id, email FROM agents ORDER BY RAND() LIMIT 1");
-    $agentData = $agentRes->fetch_assoc();
+    /* =====================================================
+       AGENT ASSIGNMENT LOGIC (NO RANDOM)
+       ===================================================== */
+
+    // Active statuses (means agent is captured/busy)
+    $activeStatuses = array('Pending','Assigned','In Transit');
+    $statusesList = "'" . implode("','", $activeStatuses) . "'";
+
+    // 1️⃣ First try: Find agent NOT currently assigned to active orders
+    $agentRes = $conn->query(
+        "SELECT id, email 
+         FROM agents 
+         WHERE id NOT IN (
+             SELECT agent_id 
+             FROM neworders 
+             WHERE status IN ($statusesList) 
+               AND agent_id IS NOT NULL
+         )
+         ORDER BY id ASC
+         LIMIT 1"
+    );
+
+    // 2️⃣ If all agents are busy → assign serially (least assigned first)
+    if (!$agentRes || $agentRes->num_rows === 0) {
+        $agentRes = $conn->query(
+            "SELECT a.id, a.email
+             FROM agents a
+             LEFT JOIN (
+                 SELECT agent_id, COUNT(*) AS total_orders
+                 FROM neworders
+                 GROUP BY agent_id
+             ) t ON a.id = t.agent_id
+             ORDER BY COALESCE(t.total_orders,0) ASC, a.id ASC
+             LIMIT 1"
+        );
+    }
+
+    $agentData = $agentRes ? $agentRes->fetch_assoc() : null;
     $agent_id = $agentData['id'] ?? NULL;
 
-   $sql = "INSERT INTO neworders
-(user_id, sender_name, sender_phone, sender_email, pickup_address,
- receiver_name, receiver_phone, receiver_email, delivery_address,
- package_type, instructions, status, tracking_id, agent_id)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    /* ===================================================== */
+
+    $sql = "INSERT INTO neworders 
+            (user_id, sender_name, sender_phone, sender_email, pickup_address, 
+             receiver_name, receiver_phone, receiver_email, delivery_address, 
+             package_type, instructions, status, tracking_id, agent_id) 
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
     $stmt = $conn->prepare($sql);
- $stmt->bind_param(
-    "issssssssssssi",
-    $user_id,
-    $sender_name,
-    $sender_phone,
-    $sender_email,
-    $pickup_address,
-    $receiver_name,
-    $receiver_phone,
-    $receiver_email,
-    $delivery_address,
-    $package_type,
-    $instructions,
-    $status,
-    $tracking_id,
-    $agent_id
-);
+
+    $stmt->bind_param(
+        "issssssssssssi",
+        $user_id,
+        $sender_name,
+        $sender_phone,
+        $sender_email,
+        $pickup_address,
+        $receiver_name,
+        $receiver_phone,
+        $receiver_email,
+        $delivery_address,
+        $package_type,
+        $instructions,
+        $status,
+        $tracking_id,
+        $agent_id
+    );
 
     if ($stmt->execute()) {
         $_SESSION['successMsg'] = "✅ Order placed! Tracking ID: $tracking_id";

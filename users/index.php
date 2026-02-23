@@ -169,7 +169,7 @@ tr:hover { background-color: #f9f9f9; }
           $statusClass = str_replace(' ', '-', $order['status']);
       ?>
         <tr>
-          <td>#<?php echo $order['id']; ?></td>
+          <td><?php echo $order['id']; ?></td>
           
           <td>
             <strong><?php echo htmlspecialchars($order['sender_name']); ?></strong><br>
