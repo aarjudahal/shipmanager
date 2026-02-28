@@ -14,7 +14,16 @@ if (isset($_POST['add_agent'])) {
     $email = trim($_POST['email']);
     $phone = trim($_POST['phone']);
 
-    if ($name && $email && $phone) {
+    // Validation Logic
+    if (empty($name) || empty($email) || empty($phone)) {
+        $_SESSION['errorMsg'] = "❌ All fields are required!";
+    } elseif (!preg_match("/^[a-zA-Z\s]+$/", $name)) {
+        $_SESSION['errorMsg'] = "❌ Name should only contain letters and spaces!";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['errorMsg'] = "❌ Invalid email format!";
+    } elseif (!preg_match("/^[0-9]{10}$/", $phone)) {
+        $_SESSION['errorMsg'] = "❌ Phone number must be exactly 10 digits!";
+    } else {
         $stmt = $conn->prepare("INSERT INTO agents (name, email, phone) VALUES (?, ?, ?)");
         $stmt->bind_param("sss", $name, $email, $phone);
         if ($stmt->execute()) {
@@ -25,8 +34,6 @@ if (isset($_POST['add_agent'])) {
         $stmt->close();
         header("Location: " . $_SERVER['PHP_SELF']);
         exit();
-    } else {
-        $_SESSION['errorMsg'] = "❌ All fields are required!";
     }
 }
 
@@ -46,7 +53,16 @@ if (isset($_POST['edit_agent'])) {
     $email = trim($_POST['email']);
     $phone = trim($_POST['phone']);
 
-    if ($name && $email && $phone) {
+    // Validation Logic for Edit
+    if (empty($name) || empty($email) || empty($phone)) {
+        $_SESSION['errorMsg'] = "❌ All fields are required!";
+    } elseif (!preg_match("/^[a-zA-Z\s]+$/", $name)) {
+        $_SESSION['errorMsg'] = "❌ Name should only contain letters and spaces!";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['errorMsg'] = "❌ Invalid email format!";
+    } elseif (!preg_match("/^[0-9]{10}$/", $phone)) {
+        $_SESSION['errorMsg'] = "❌ Phone number must be exactly 10 digits!";
+    } else {
         $stmt = $conn->prepare("UPDATE agents SET name=?, email=?, phone=? WHERE id=?");
         $stmt->bind_param("sssi", $name, $email, $phone, $id);
         if ($stmt->execute()) {
@@ -57,8 +73,6 @@ if (isset($_POST['edit_agent'])) {
         $stmt->close();
         header("Location: " . $_SERVER['PHP_SELF']);
         exit();
-    } else {
-        $_SESSION['errorMsg'] = "❌ All fields are required!";
     }
 }
 
@@ -116,7 +130,7 @@ tr:hover { background:#f5faff; }
 }
 .modal-content h3 { margin-top:0; color:#004aad; }
 .modal-content input { width:100%; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #ccc; }
-.modal-content button { margin-top:10px; background:#0077b6; color:#fff; }
+.modal-content button { margin-top:10px; background:#0077b6; color:#fff; width: 100%; }
 .close-btn {
   position:absolute;
   top:15px; right:15px;
@@ -141,15 +155,13 @@ tr:hover { background:#f5faff; }
     <div class="error-msg"><?php echo $_SESSION['errorMsg']; unset($_SESSION['errorMsg']); ?></div>
 <?php endif; ?>
 
-<!-- Add New Agent -->
 <form method="POST">
-    <input type="text" name="name" placeholder="Agent Name" required>
+    <input type="text" name="name" placeholder="Agent Name" pattern="[A-Za-z\s]+" title="Letters and spaces only" required>
     <input type="email" name="email" placeholder="Email" required>
-    <input type="tel" name="phone" placeholder="Phone Number" pattern="[0-9]{10}" required>
+    <input type="tel" name="phone" placeholder="Phone Number" pattern="[0-9]{10}" title="Must be 10 digits" required>
     <button type="submit" name="add_agent">Add Agent</button>
 </form>
 
-<!-- Agents Table -->
 <table>
     <thead>
         <tr>
@@ -182,16 +194,15 @@ tr:hover { background:#f5faff; }
 
 </div>
 
-<!-- Edit Modal -->
 <div class="modal" id="editModal">
   <div class="modal-content">
     <button class="close-btn" onclick="closeModal()">X</button>
     <h3>Edit Agent</h3>
     <form method="POST">
         <input type="hidden" id="agent_id" name="agent_id">
-        <input type="text" id="agent_name" name="name" placeholder="Name" required>
+        <input type="text" id="agent_name" name="name" placeholder="Name" pattern="[A-Za-z\s]+" title="Letters and spaces only" required>
         <input type="email" id="agent_email" name="email" placeholder="Email" required>
-        <input type="tel" id="agent_phone" name="phone" placeholder="Phone" required>
+        <input type="tel" id="agent_phone" name="phone" placeholder="Phone" pattern="[0-9]{10}" title="Must be 10 digits" required>
         <button type="submit" name="edit_agent">Save Changes</button>
     </form>
   </div>
